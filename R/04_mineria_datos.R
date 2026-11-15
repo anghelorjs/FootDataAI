@@ -120,7 +120,7 @@ conteo_equipos <- menciones_equipos |> dplyr::count(entidad,name='noticias',sort
 conteo_competiciones <- menciones_competiciones |> dplyr::count(entidad,name='noticias',sort=TRUE)
 
 # 4. Cruce entre temas previos y menciones de entidades.
-columnas_tema <- grep('^tema_',names(noticias),value=TRUE)
+columnas_tema <- setdiff(grep('^tema_',names(noticias),value=TRUE), 'tema_principal')
 if (!length(columnas_tema)) stop('La fase 4 no genero columnas tema_*.')
 para_logico <- function(x) tolower(trimws(as.character(x))) %in% c('true','t','1','si','sí')
 for (col in columnas_tema) noticias[[col]] <- para_logico(noticias[[col]])
