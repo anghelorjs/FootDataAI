@@ -1,5 +1,5 @@
 # =============================================================================
-# FOOTDATA AI | FASE 6 - DASHBOARD INTERACTIVO
+# FOOTDATA AI | FASE 7 - DASHBOARD + CHATBOT LOCAL
 # Instalar: install.packages(c('shiny','bslib','readr','dplyr','tidyr',
 #                            'stringr','ggplot2','plotly','DT'))
 # Ejecutar desde la carpeta FootDataAI: Rscript app.R
@@ -11,6 +11,9 @@ paquetes <- c('shiny','bslib','readr','dplyr','tidyr','stringr','ggplot2','plotl
 faltantes <- paquetes[!vapply(paquetes, requireNamespace, logical(1), quietly=TRUE)]
 if (length(faltantes)) stop('Instala paquetes faltantes: ', paste(faltantes,collapse=', '),
                             '\ninstall.packages(c(',paste(sprintf('"%s"',faltantes),collapse=', '),'))')
+
+if (!file.exists('R/05_chatbot.R')) stop('Falta R/05_chatbot.R en el proyecto.')
+source('R/05_chatbot.R', local=TRUE)
 
 archivo_noticias <- 'data/procesados/mineria_noticias.csv'
 archivo_equipos <- 'reportes/fase5/09_detalle_menciones_equipos.csv'
@@ -138,6 +141,21 @@ ui <- shiny::fluidPage(
           shiny::p('El botón de búsqueda y los filtros actúan sobre las noticias disponibles en la base procesada.'),
           DT::DTOutput('tabla_noticias')
         ),
+        shiny::tabPanel('ChatBot',
+          shiny::br(),
+          shiny::h4('🤖 Consulta las noticias de FootDataAI'),
+          shiny::p('Respuestas basadas solo en los CSV de la fase 5. Sin IA externa, sin noticias inventadas.'),
+          shiny::p('Ejemplos: últimas noticias · noticias de Chelsea · fichajes · cuántas noticias hay · equipos más mencionados.'),
+          shiny::div(class='fd-chat-history',style='max-height:520px;overflow-y:auto;',
+                     shiny::uiOutput('chat_historial')),
+          shiny::fluidRow(
+            shiny::column(10,shiny::textInput('chat_pregunta',NULL,
+              placeholder='Ej.: ¿Qué noticias hay sobre la Champions League?',width='100%')),
+            shiny::column(2,shiny::actionButton('chat_enviar','Enviar',class='btn-success',width='100%'))
+          ),
+          shiny::actionButton('chat_limpiar','Limpiar conversación',class='btn-outline-secondary'),
+          shiny::p(shiny::tags$small('El ChatBot consulta el corpus completo cargado, independientemente de los filtros del Dashboard.'))
+        ),
         shiny::tabPanel('Metodología',shiny::br(),
           shiny::h4('Alcance y limitaciones'),
           shiny::tags$ul(
@@ -146,7 +164,8 @@ ui <- shiny::fluidPage(
             shiny::tags$li('Una noticia puede mencionar más de un equipo o competición.'),
             shiny::tags$li('Las noticias sin fecha no se agregan en el gráfico temporal.'),
             shiny::tags$li('Las tendencias observadas son descriptivas, no predictivas.'),
-            shiny::tags$li('El ChatBot y la actualización RSS integrada se incorporarán en fases posteriores.')
+            shiny::tags$li('El ChatBot consulta noticias locales mediante reglas y búsquedas; no es un modelo generativo.'),
+            shiny::tags$li('La actualización automática de RSS se incorporará en la fase 8.')
           ),
           shiny::verbatimTextOutput('calidad')
         )
@@ -158,6 +177,49 @@ ui <- shiny::fluidPage(
 server <- function(input,output,session) {
   datos <- shiny::reactiveVal(cargar())
   ultimo <- shiny::reactiveVal(Sys.time())
+
+  # ChatBot: historial local a la sesión, con respuestas fundamentadas en noticias.
+  historial <- shiny::reactiveVal(list())
+  shiny::observeEvent(input$chat_enviar, {
+    pregunta <- trimws(input$chat_pregunta)
+    if (!nzchar(pregunta)) return(invisible(NULL))
+    respuesta <- tryCatch(fd_chatbot_responder(pregunta,datos()$noticias),
+      error=function(e) list(texto=paste('No pude procesar la pregunta:',conditionMessage(e)),
+                              noticias=datos()$noticias[0,,drop=FALSE],tipo='error'))
+    anterior <- historial()
+    anterior[[length(anterior)+1L]] <- list(pregunta=pregunta,respuesta=respuesta)
+    historial(tail(anterior,12L))
+    shiny::updateTextInput(session,'chat_pregunta',value='')
+  })
+  shiny::observeEvent(input$chat_limpiar, historial(list()))
+  output$chat_historial <- shiny::renderUI({
+    mensajes <- historial()
+    if (!length(mensajes)) return(shiny::div(class='alert alert-secondary',
+      'Escribe una pregunta para consultar los titulares almacenados.'))
+    shiny::tagList(lapply(mensajes,function(m) {
+      r <- m$respuesta
+      tarjetas <- if (!is.null(r$noticias) && nrow(r$noticias))
+        lapply(seq_len(nrow(r$noticias)), function(i) {
+          noticia <- r$noticias[i,,drop=FALSE]
+          url <- noticia$url[[1]]
+          titulo <- noticia$titulo[[1]]
+          fecha <- noticia$fecha_publicacion_utc[[1]]
+          fecha <- if (is.na(fecha) || !nzchar(fecha)) 'Fecha no disponible (UTC)' else paste0('Publicado UTC: ',fecha)
+          fuente <- noticia$fuente[[1]]
+          enlace <- if (!is.na(url) && grepl('^https?://',url,ignore.case=TRUE))
+            shiny::tags$a(href=url,target='_blank',rel='noopener noreferrer',titulo)
+            else shiny::span(titulo)
+          shiny::div(style='border-left:3px solid #10b981;padding:9px 12px;margin:8px 0;background:#23333f;border-radius:5px;',
+                     enlace,shiny::tags$div(style='font-size:12px;color:#b9c7d3;',
+                       paste(fecha,'|',fuente)))
+        }) else NULL
+      shiny::div(style='margin:12px 0 18px 0;',
+        shiny::div(style='text-align:right;margin-bottom:8px;',
+          shiny::span(style='display:inline-block;background:#145c50;color:white;padding:9px 13px;border-radius:12px;max-width:90%;',m$pregunta)),
+        shiny::div(style='background:#1f2d3b;border:1px solid #3a5265;border-radius:12px;padding:12px;',
+          shiny::strong('FootDataAI: '),shiny::span(r$texto),tarjetas))
+    }))
+  })
 
   # Se inicia una sola lectura y se actualiza bajo demanda.
   shiny::observeEvent(input$recargar, {
