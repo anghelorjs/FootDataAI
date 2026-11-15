@@ -46,19 +46,32 @@ texto_xml <- function(nodo, xpath) {
   if (!nzchar(val)) NA_character_ else val
 }
 fecha_rss <- function(x) {
-  if (is.na(x) || !nzchar(x)) return(NA_character_)
+  # Independiente del idioma regional de Windows. BBC entrega meses ingleses.
+  if (is.na(x) || !nzchar(trimws(x))) return(NA_character_)
   x <- trimws(x)
-  # RSS 2.0: Sun, 15 Nov 2026 12:30:00 GMT o con offset +0000
-  x <- sub(' GMT$', ' +0000', x)
-  x <- sub(' UTC$', ' +0000', x)
-  formats <- c('%a, %d %b %Y %H:%M:%S %z',
-               '%d %b %Y %H:%M:%S %z',
-               '%a, %d %b %Y %H:%M %z')
-  for (fmt in formats) {
-    fecha <- suppressWarnings(as.POSIXct(x, format=fmt, tz='UTC'))
-    if (!is.na(fecha)) return(format(fecha, '%Y-%m-%d %H:%M:%S', tz='UTC'))
+  x <- sub('^(Mon|Tue|Wed|Thu|Fri|Sat|Sun),?\\s+', '', x, ignore.case=TRUE)
+  patron <- '^([0-9]{1,2})\\s+([A-Za-z]{3})\\s+([0-9]{4})\\s+([0-9]{2}:[0-9]{2})(:[0-9]{2})?\\s+(GMT|UTC|[+-][0-9]{4})$'
+  m <- regmatches(x, regexec(patron, x, ignore.case=TRUE))[[1]]
+  if (length(m) != 7L) return(NA_character_)
+  meses <- c(Jan=1, Feb=2, Mar=3, Apr=4, May=5, Jun=6,
+             Jul=7, Aug=8, Sep=9, Oct=10, Nov=11, Dec=12)
+  mes <- unname(meses[match(tolower(m[3]), tolower(names(meses)))])
+  if (is.na(mes)) return(NA_character_)
+  hora <- paste0(m[5], if (nzchar(m[6])) m[6] else ':00')
+  iso <- sprintf('%04d-%02d-%02d %s', as.integer(m[4]), mes,
+                 as.integer(m[2]), hora)
+  base <- suppressWarnings(as.POSIXct(iso, format='%Y-%m-%d %H:%M:%S', tz='UTC'))
+  if (is.na(base)) return(NA_character_)
+  zona <- toupper(m[7])
+  desplazamiento <- 0
+  if (grepl('^[+-][0-9]{4}$', zona)) {
+    signo <- if (substr(zona,1,1)=='+') 1 else -1
+    h <- as.integer(substr(zona,2,3))
+    min <- as.integer(substr(zona,4,5))
+    if (h > 23 || min > 59) return(NA_character_)
+    desplazamiento <- signo * (h*3600 + min*60)
   }
-  NA_character_
+  format(base-desplazamiento, '%Y-%m-%d %H:%M:%S', tz='UTC')
 }
 
 extraer_feed <- function(nombre, url) {
@@ -150,7 +163,13 @@ for (i in seq_along(FEEDS)) {
 extraidas <- dplyr::bind_rows(resultados) |>
   dplyr::distinct(url, .keep_all=TRUE)
 nuevas <- dplyr::filter(extraidas, !(url %in% acumulado$url))
-consolidado <- dplyr::bind_rows(acumulado, nuevas) |>
+# Actualizar metadatos de URLs existentes (especialmente fechas antes vacias).
+# Los datos del RSS fresco prevalecen cuando son informativos.
+if (nrow(extraidas)) {
+  acumulado <- acumulado |>
+    dplyr::filter(!(url %in% extraidas$url))
+}
+consolidado <- dplyr::bind_rows(acumulado, extraidas) |>
   dplyr::distinct(url, .keep_all=TRUE)
 
 # Crear CSV solo cuando haya datos (nuevos o historicos).
