@@ -1,10 +1,10 @@
 # =============================================================================
-# FOOTDATA AI | FASE 7 - DASHBOARD + CHATBOT LOCAL
+# FOOTDATA AI | FASE 8 - DASHBOARD + CHATBOT + ACTUALIZACION RSS
 # Instalar: install.packages(c('shiny','bslib','readr','dplyr','tidyr',
-#                            'stringr','ggplot2','plotly','DT'))
+#                            'stringr','ggplot2','plotly','DT','processx'))
 # Ejecutar desde la carpeta FootDataAI: Rscript app.R
 # Fuente de datos: data/procesados/mineria_noticias.csv y reportes/fase5/*.csv
-# NO extrae RSS ni modifica la base SQLite. Actualizar datos manualmente en fases 2-5.
+# Actualización opcional: lanza las fases 2-5 desde R/06_actualizacion.R.
 # =============================================================================
 
 paquetes <- c('shiny','bslib','readr','dplyr','tidyr','stringr','ggplot2','plotly','DT')
@@ -13,6 +13,7 @@ if (length(faltantes)) stop('Instala paquetes faltantes: ', paste(faltantes,coll
                             '\ninstall.packages(c(',paste(sprintf('"%s"',faltantes),collapse=', '),'))')
 
 if (!file.exists('R/05_chatbot.R')) stop('Falta R/05_chatbot.R en el proyecto.')
+if (!file.exists('R/06_actualizacion.R')) stop('Falta R/06_actualizacion.R en el proyecto.')
 source('R/05_chatbot.R', local=TRUE)
 
 archivo_noticias <- 'data/procesados/mineria_noticias.csv'
@@ -104,9 +105,15 @@ ui <- shiny::fluidPage(
                             format='yyyy-mm-dd',separator=' a '),
       shiny::checkboxInput('incluir_sin_fecha','Incluir noticias sin fecha',value=TRUE),
       shiny::textInput('busqueda','Buscar en titular',''),
+      shiny::actionButton('actualizar_rss','Actualizar noticias desde BBC',class='btn-primary'),
+      shiny::br(), shiny::br(),
       shiny::actionButton('recargar','Recargar archivos locales',class='btn-success'),
       shiny::hr(),
-      shiny::p('Recargar solo lee los CSV existentes; no consulta internet.'),
+      shiny::p('Actualizar ejecuta las fases 2–5. BBC RSS solo se consulta cuando han transcurrido 60 minutos desde el intento anterior.'),
+      shiny::p(shiny::strong('Estado:'), shiny::textOutput('estado_actualizacion')),
+      shiny::tags$details(shiny::tags$summary('Ver detalles de actualizacion'),
+                          shiny::verbatimTextOutput('detalle_actualizacion')),
+      shiny::p('Recargar solo vuelve a leer los CSV existentes.'),
       shiny::p(shiny::textOutput('actualizacion'))
     ),
     shiny::mainPanel(width=9,
@@ -165,7 +172,7 @@ ui <- shiny::fluidPage(
             shiny::tags$li('Las noticias sin fecha no se agregan en el gráfico temporal.'),
             shiny::tags$li('Las tendencias observadas son descriptivas, no predictivas.'),
             shiny::tags$li('El ChatBot consulta noticias locales mediante reglas y búsquedas; no es un modelo generativo.'),
-            shiny::tags$li('La actualización automática de RSS se incorporará en la fase 8.')
+            shiny::tags$li('Actualización bajo demanda con intervalos de seguridad; no se evita el límite impuesto por la fuente.')
           ),
           shiny::verbatimTextOutput('calidad')
         )
@@ -177,6 +184,79 @@ ui <- shiny::fluidPage(
 server <- function(input,output,session) {
   datos <- shiny::reactiveVal(cargar())
   ultimo <- shiny::reactiveVal(Sys.time())
+
+  # Fase 8: ejecutar procesamiento en otro proceso para no bloquear Shiny.
+  proceso_actualizacion <- shiny::reactiveVal(NULL)
+  estado_actualizacion <- shiny::reactiveVal('Sin actualización iniciada en esta sesión')
+  detalle_actualizacion <- shiny::reactiveVal('')
+  ruta_estado <- 'reportes/fase8/estado.txt'
+  ruta_lock <- 'reportes/fase8/actualizacion_en_curso.lock'
+  leer_estado <- function() {
+    if (!file.exists(ruta_estado)) return('Sin actualizaciones registradas')
+    lineas <- tryCatch(readLines(ruta_estado, warn=FALSE, encoding='UTF-8'), error=function(e) character())
+    paste(lineas, collapse=' | ')
+  }
+
+  shiny::observeEvent(input$actualizar_rss, {
+    actual <- proceso_actualizacion()
+    if (!is.null(actual) && actual$is_alive()) {
+      shiny::showNotification('Ya se esta actualizando. Revisa el estado.', type='warning')
+      return(invisible(NULL))
+    }
+    if (dir.exists(ruta_lock)) {
+      shiny::showNotification('Otra actualización está en curso o dejó un candado pendiente. Revisa reportes/fase8.', type='warning', duration=12)
+      return(invisible(NULL))
+    }
+    dir.create('reportes/fase8', recursive=TRUE, showWarnings=FALSE)
+    ejecutable <- Sys.which('Rscript')
+    if (!nzchar(ejecutable)) ejecutable <- file.path(R.home('bin'), if (.Platform$OS.type=='windows') 'Rscript.exe' else 'Rscript')
+    if (!file.exists(ejecutable)) {
+      shiny::showNotification('No se encontró Rscript.',type='error')
+      return(invisible(NULL))
+    }
+    intento <- tryCatch(processx::process$new(
+      command=ejecutable,
+      args=c('--vanilla', 'R/06_actualizacion.R'),
+      wd=normalizePath(getwd()),
+      stdout='reportes/fase8/consola.log',
+      stderr='reportes/fase8/errores.log',
+      cleanup=FALSE
+    ), error=function(e) e)
+    if (inherits(intento, 'error')) {
+      shiny::showNotification(paste('No se pudo iniciar:', conditionMessage(intento)),type='error',duration=12)
+      return(invisible(NULL))
+    }
+    proceso_actualizacion(intento)
+    estado_actualizacion('Actualizando en segundo proceso...')
+    detalle_actualizacion('El dashboard seguirá disponible mientras se ejecutan las fases.')
+    shiny::showNotification('Actualización iniciada. No cierres el proceso de R.',type='message')
+  })
+
+  shiny::observe({
+    shiny::invalidateLater(1500, session)
+    p <- proceso_actualizacion()
+    if (is.null(p)) return(invisible(NULL))
+    detalle_actualizacion(leer_estado())
+    if (p$is_alive()) return(invisible(NULL))
+    codigo <- p$get_exit_status()
+    proceso_actualizacion(NULL)
+    if (!is.null(codigo) && codigo==0L) {
+      tryCatch({
+        datos(cargar())
+        ultimo(Sys.time())
+        estado_actualizacion('Completado. Dashboard y ChatBot recargados.')
+        shiny::showNotification('Noticias y gráficos actualizados.',type='message')
+      }, error=function(e) {
+        estado_actualizacion(paste('Procesado, pero falló la recarga:',conditionMessage(e)))
+        shiny::showNotification(conditionMessage(e),type='error',duration=12)
+      })
+    } else {
+      estado_actualizacion(paste('Error durante la actualización (código',codigo,'). Revisa reportes/fase8.'))
+      shiny::showNotification('Fallo la actualización. Revisa los logs por fase.',type='error',duration=12)
+    }
+  })
+  output$estado_actualizacion <- shiny::renderText(estado_actualizacion())
+  output$detalle_actualizacion <- shiny::renderText(detalle_actualizacion())
 
   # ChatBot: historial local a la sesión, con respuestas fundamentadas en noticias.
   historial <- shiny::reactiveVal(list())
