@@ -1,3 +1,11 @@
 //ignora la carpeta de reportes
 reportes/*
 futbol.sqlite
+
+# Interfaz y archivos locales
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+.Rhistory
+.RData
+*.tsbuildinfo

@@ -35,6 +35,9 @@ paquetes <- c(
   "RSQLite",
 
   # Dashboard y chatbot
+  "plumber",
+  "processx",
+  "later",
   "shiny",
   "bslib",
   "ggplot2",

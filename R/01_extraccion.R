@@ -197,3 +197,6 @@ cat('Estado:',paste(estados,collapse='; '),'\n')
 cat('CSV:',CSV_SALIDA,'\n')
 cat('Log:',LOG_SALIDA,'\n')
 if (nrow(nuevas)) print(utils::head(dplyr::select(nuevas, titulo, fecha_publicacion_utc), 5))
+if (!any(grepl(':200$', estados))) {
+  stop('Ningun canal RSS respondio correctamente. Se conservaron las noticias existentes; revisa el log de extraccion.')
+}
