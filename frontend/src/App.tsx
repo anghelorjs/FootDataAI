@@ -119,6 +119,15 @@ export default function App() {
     catch (e) { setToast({ message: errorMessage(e), error: true }) }
     finally { setBusy(false) }
   }
+  async function setIntervalMinutes(value: number) {
+    setBusy(true)
+    try {
+      const next = await request<UpdateStatus>('settings', { intervalMinutes: value })
+      setStatus(next)
+      setToast({ message: `Intervalo solicitado: ${value} min. Se respeta el TTL/cache de la fuente.` })
+    } catch (error) { setToast({ message: errorMessage(error), error: true }) }
+    finally { setBusy(false) }
+  }
   function download() {
     const url = URL.createObjectURL(new Blob([exportCsv(filtered)], { type: 'text/csv;charset=utf-8;' }))
     const a = document.createElement('a'); a.href = url; a.download = `footdata-noticias-${new Date().toISOString().slice(0, 10)}.csv`; a.click(); URL.revokeObjectURL(url)
@@ -138,7 +147,7 @@ export default function App() {
       {page === 'news' && <><div className="section-meta"><span><span className="dot" />{filtered.length} noticias en tu selección</span><span>Guardadas en este navegador: {saved.length}</span></div><NewsExplorer articles={filtered} saved={saved} onSave={save} onOpen={setSelected} /></>}
       {page === 'mining' && <><div className="mining-intro"><div className="mining-icon"><Network size={23} /></div><div><h3>La historia detrás de los titulares</h3><p>{filtered.length} documentos · {filtered.reduce((n, a) => n + a.tokens.length, 0).toLocaleString('es-BO')} tokens · {termStats(filtered).length.toLocaleString('es-BO')} términos distintos. Todos los análisis responden a tus filtros.</p></div><span className="outline-tag">ANÁLISIS DESCRIPTIVO</span></div><GraphChartPanel articles={filtered} onEntity={chartFilter} large /><div className="chart-grid"><HeatmapChart articles={filtered} /><TermsChart articles={filtered} onWord={wordFilter} /></div><div className="chart-grid"><TeamsChart articles={filtered} onTeam={teamFilter} /><TopicsChart articles={filtered} onTopic={topicFilter} /></div><div className="methodology"><CircleHelp size={18} /><div><strong>Cómo leer estos datos</strong><p>La red muestra coocurrencia, no causalidad. TF-IDF mide qué distingue un término dentro de este conjunto; no su relevancia deportiva. Los equipos y temas se detectan por diccionarios, con posibles omisiones. Las publicaciones sin fecha no entran en los análisis temporales. Una muestra pequeña describe únicamente las noticias recopiladas.</p></div></div></>}
       <div hidden={page !== 'chat'}>{/* Mantiene la conversación al navegar entre secciones. */}<Chat articles={articles} filtered={filtered} filters={filters} onOpen={setSelected} /></div>
-      {page === 'system' && <System snapshot={snapshot} status={status} onUpdate={() => void update()} onAuto={value => void auto(value)} onReload={() => void reload()} busy={busy} />}
+      {page === 'system' && <System snapshot={snapshot} status={status} onUpdate={() => void update()} onAuto={value => void auto(value)} onInterval={value => void setIntervalMinutes(value)} onReload={() => void reload()} busy={busy} />}
       <footer className="page-footer"><span><Activity size={13} />FootDataAI<span className="footer-separator">/</span>Del fútbol al conocimiento.</span><span>{snapshot.meta.extractedAt ? `Última extracción: ${formatDate(snapshot.meta.extractedAt, true)} UTC` : 'Sin registro de extracción'}<span className="footer-separator">·</span>BBC Sport RSS</span></footer>
     </>}
     </main></div>{selected && <ArticleDialog article={selected} onClose={() => setSelected(null)} saved={saved.includes(selected.id)} onSave={save} />}{toast && <div className={`toast ${toast.error ? 'toast-error' : ''}`} role={toast.error ? 'alert' : 'status'}>{toast.error ? <CircleHelp size={18} /> : <Check size={18} />}<span>{toast.message}</span><button aria-label="Cerrar aviso" onClick={() => setToast(null)}><X size={15} /></button></div>}

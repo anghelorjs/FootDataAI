@@ -35,16 +35,42 @@ if team:
     answer = call('/api/chat', {'question': 'Ultimas noticias', 'filters': {'team': team}})
     assert answer['scopeCount'] == len(selected)
     assert set(answer['articles']) <= {a['id'] for a in selected}
+    context = answer['contextIds']
+    read = call('/api/chat', {'question': 'Resume estas noticias', 'contextIds': context})
+    assert read['type'] == 'lectura' and read['articles'] == context
+    if context:
+        first = call('/api/chat', {'question': 'La primera', 'contextIds': context})
+        assert first['articles'] == [context[0]] and first['contextIds'] == [context[0]]
+        single = call('/api/chat', {'question': 'Que indica esta noticia?', 'contextIds': [context[0]]})
+        assert single['type'] == 'lectura'
+        restricted = call('/api/chat', {'question': 'Que indica esta noticia?', 'contextIds': [context[0]], 'filters': {'ids': []}})
+        assert restricted['articles'] == []
+assert call('/api/chat', {'question': 'Que indica esta noticia?'})['type'] == 'aclaracion'
+assert call('/api/chat', {'question': 'Que indica esta noticia?', 'contextIds': ['inexistente']})['articles'] == []
 assert call('/api/chat', {'question': 'Ultimas noticias', 'filters': {'ids': []}})['scopeCount'] == 0
 call('/api/chat', {'question': ''}, expected=400)
 call('/api/chat', {'question': ['incorrecta']}, expected=400)
+call('/api/chat', {'question': 'noticias', 'contextIds': '1'}, expected=400)
+call('/api/chat', {'question': 'noticias', 'contextIds': [1]}, expected=400)
+call('/api/chat', {'question': 'noticias', 'contextIds': ['1'] * 1001}, expected=400)
 call('/api/chat', {'question': 'noticias', 'filters': {'from': 'incorrecta'}}, expected=400)
 call('/api/settings', {'automatic': 'si'}, expected=400)
 call('/api/settings', {'automatic': False}, {'Origin': 'https://example.org'}, expected=403)
 status = call('/api/status')
 assert isinstance(status['running'], bool) and isinstance(status['automatic'], bool)
+assert 1 <= status['intervalMinutes'] <= 1440
+assert status['effectiveIntervalSeconds'] >= status['intervalMinutes'] * 60
+assert status['effectiveIntervalSeconds'] >= status['sourceMinimumSeconds']
 assert call('/api/settings', {'automatic': not status['automatic']})['automatic'] != status['automatic']
 call('/api/settings', {'automatic': status['automatic']})
+configured = call('/api/settings', {'intervalMinutes': 1})
+assert configured['intervalMinutes'] == 1
+assert configured['effectiveIntervalSeconds'] >= configured['sourceMinimumSeconds']
+call('/api/settings', {'intervalMinutes': status['intervalMinutes']})
+call('/api/settings', {'intervalMinutes': 0}, expected=400)
+call('/api/settings', {'intervalMinutes': '1'}, expected=400)
+call('/api/settings', {'intervalMinutes': 1.5}, expected=400)
+call('/api/settings', {'intervalMinutes': [1]}, expected=400)
 assert len(call('/api/logs')) == 4
 html = urllib.request.urlopen(args.url, timeout=30).read().decode()
 assert 'FootDataAI' in html and '/assets/' in html

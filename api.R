@@ -43,18 +43,38 @@ api <- plumber::pr_post(api,'/api/chat',function(req,res) {
     res$status <- 400L; return(list(error='Escribe una pregunta de entre 1 y 1000 caracteres.'))
   }
   tryCatch({
+    contexto <- cuerpo$contextIds
+    if (is.null(contexto)) contexto <- list()
+    if (!is.list(contexto) || length(contexto)>1000L ||
+        !all(vapply(contexto,function(id) is.character(id) && length(id)==1L &&
+          !is.na(id) && nzchar(id) && nchar(id)<=100L,logical(1)))) {
+      res$status <- 400L; return(list(error='contextIds debe ser una lista de hasta 1000 identificadores de noticias.'))
+    }
     n <- fd_filtrar(fd_cargar_snapshot()$noticias,if (is.null(cuerpo$filters)) list() else cuerpo$filters)
-    respuesta <- fd_chatbot_responder(cuerpo$question,n)
+    respuesta <- fd_chatbot_responder(cuerpo$question,n,contexto_ids=unlist(contexto,use.names=FALSE))
     list(text=respuesta$texto,type=respuesta$tipo,scopeCount=nrow(n),
-      articles=as.list(as.character(respuesta$noticias$id)))
+      articles=as.list(as.character(respuesta$noticias$id)),
+      contextIds=as.list(respuesta$contexto_ids), resultCount=respuesta$total)
   },error=function(e) {res$status <- 400L; list(error=conditionMessage(e))})
 })
 api <- plumber::pr_post(api,'/api/update',function() fd_iniciar_actualizacion())
 api <- plumber::pr_post(api,'/api/settings',function(req,res) {
-  if (!is.list(req$body) || !is.logical(req$body$automatic) || length(req$body$automatic)!=1 || is.na(req$body$automatic)) {
+  cuerpo <- req$body
+  if (!is.list(cuerpo) || (is.null(cuerpo$automatic) && is.null(cuerpo$intervalMinutes))) {
+    res$status <- 400L; return(list(error='Indica automatic o intervalMinutes.'))
+  }
+  if (!is.null(cuerpo$automatic) && (!is.logical(cuerpo$automatic) || length(cuerpo$automatic)!=1 || is.na(cuerpo$automatic))) {
     res$status <- 400L; return(list(error='automatic debe ser true o false.'))
   }
-  fd_web$automatico <- req$body$automatic
+  intervalo <- tryCatch({
+    if (is.null(cuerpo$intervalMinutes)) NULL else {
+      if (!is.numeric(cuerpo$intervalMinutes)) stop('intervalMinutes debe ser un numero entero entre 1 y 1440.')
+      fd_rss_intervalo_minutos(cuerpo$intervalMinutes)
+    }
+  },error=function(e)e)
+  if (inherits(intervalo,'error')) {res$status <- 400L; return(list(error=conditionMessage(intervalo)))}
+  if (!is.null(cuerpo$automatic)) fd_web$automatico <- cuerpo$automatic
+  if (!is.null(intervalo)) Sys.setenv(FOOTDATA_RSS_INTERVAL_MINUTES=as.character(intervalo))
   fd_estado()
 })
 api <- plumber::pr_get(api,'/api/logs',function() {
@@ -71,9 +91,9 @@ if (dir.exists('frontend/dist')) {
 # El temporizador funciona aunque no haya navegadores abiertos, mientras la API siga activa.
 programar <- function() {
   fd_tick()
-  later::later(programar,60)
+  later::later(programar,15)
 }
-later::later(programar,60)
+later::later(programar,15)
 puerto <- as.integer(Sys.getenv('FOOTDATA_PORT','8000'))
 message('FootDataAI disponible en http://127.0.0.1:',puerto)
 plumber::pr_run(api,host='127.0.0.1',port=puerto,docs=FALSE)

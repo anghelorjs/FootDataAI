@@ -23,8 +23,13 @@ export interface Snapshot {
 export interface UpdateStatus {
   running: boolean; automatic: boolean; cooldownSeconds: number
   state: string; phase: string; detail: string; updatedAt: string
+  intervalMinutes: number; sourceMinimumSeconds: number; effectiveIntervalSeconds: number
+  cooldownReason: string; nextCheckAt: string | null; lastCheckedAt: string | null
 }
-export interface ChatResponse { text: string; type: string; scopeCount: number; articles: string[] }
+export interface ChatResponse {
+  text: string; type: string; scopeCount: number; articles: string[]
+  contextIds: string[]; resultCount: number
+}
 export type Page = 'overview' | 'news' | 'mining' | 'chat' | 'system'
 export const emptyFilters: Filters = { query: '', source: '', topic: '', team: '', competition: '', from: '', to: '', includeUndated: true }
 export const topicLabels: Record<string, string> = {

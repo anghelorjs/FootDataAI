@@ -109,7 +109,7 @@ ui <- shiny::fluidPage(
       shiny::br(), shiny::br(),
       shiny::actionButton('recargar','Recargar archivos locales',class='btn-success'),
       shiny::hr(),
-      shiny::p('Actualizar ejecuta las fases 2–5. BBC RSS solo se consulta cuando han transcurrido 60 minutos desde el intento anterior.'),
+      shiny::p('Las consultas RSS se hacen cada 15 minutos por defecto, respetando el TTL/cache de la fuente. Si no cambia el contenido, se conserva el procesamiento existente.'),
       shiny::p(shiny::strong('Estado:'), shiny::textOutput('estado_actualizacion')),
       shiny::tags$details(shiny::tags$summary('Ver detalles de actualizacion'),
                           shiny::verbatimTextOutput('detalle_actualizacion')),
@@ -260,18 +260,20 @@ server <- function(input,output,session) {
 
   # ChatBot: historial local a la sesión, con respuestas fundamentadas en noticias.
   historial <- shiny::reactiveVal(list())
+  contexto_chat <- shiny::reactiveVal(character())
   shiny::observeEvent(input$chat_enviar, {
     pregunta <- trimws(input$chat_pregunta)
     if (!nzchar(pregunta)) return(invisible(NULL))
-    respuesta <- tryCatch(fd_chatbot_responder(pregunta,datos()$noticias),
+    respuesta <- tryCatch(fd_chatbot_responder(pregunta,datos()$noticias,contexto_ids=contexto_chat()),
       error=function(e) list(texto=paste('No pude procesar la pregunta:',conditionMessage(e)),
                               noticias=datos()$noticias[0,,drop=FALSE],tipo='error'))
     anterior <- historial()
     anterior[[length(anterior)+1L]] <- list(pregunta=pregunta,respuesta=respuesta)
     historial(tail(anterior,12L))
+    if (!identical(respuesta$tipo,'error')) contexto_chat(respuesta$contexto_ids)
     shiny::updateTextInput(session,'chat_pregunta',value='')
   })
-  shiny::observeEvent(input$chat_limpiar, historial(list()))
+  shiny::observeEvent(input$chat_limpiar, { historial(list()); contexto_chat(character()) })
   output$chat_historial <- shiny::renderUI({
     mensajes <- historial()
     if (!length(mensajes)) return(shiny::div(class='alert alert-secondary',
@@ -297,7 +299,7 @@ server <- function(input,output,session) {
         shiny::div(style='text-align:right;margin-bottom:8px;',
           shiny::span(style='display:inline-block;background:#145c50;color:white;padding:9px 13px;border-radius:12px;max-width:90%;',m$pregunta)),
         shiny::div(style='background:#1f2d3b;border:1px solid #3a5265;border-radius:12px;padding:12px;',
-          shiny::strong('FootDataAI: '),shiny::span(r$texto),tarjetas))
+          shiny::strong('FootDataAI: '),shiny::span(style='white-space:pre-wrap;',r$texto),tarjetas))
     }))
   })
 

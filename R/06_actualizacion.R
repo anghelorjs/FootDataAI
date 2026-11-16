@@ -2,7 +2,7 @@
 # FOOTDATA AI | FASE 8 - ACTUALIZACION INCREMENTAL DESDE RSS
 # Ejecutar desde FootDataAI: Rscript R/06_actualizacion.R
 # Usa los scripts EXISTENTES 01, 02, 03 y 04 en orden.
-# El extractor (01) limita consultas a BBC a una vez cada 60 minutos.
+# El extractor comparte el intervalo configurable y respeta el TTL/cache del RSS.
 # =============================================================================
 
 ejecutar_actualizacion <- function() {
@@ -55,6 +55,8 @@ pasos <- c(
 )
 
 reportar('EN_CURSO', 'Inicio', 'Actualizando noticias y resultados locales')
+csv_crudo <- 'data/crudos/noticias_futbol.csv'
+firma_antes <- if (file.exists(csv_crudo)) unname(tools::md5sum(csv_crudo)) else NA_character_
 for (i in seq_along(pasos)) {
   script <- file.path('R', pasos[[i]])
   if (!file.exists(script)) {
@@ -77,6 +79,17 @@ for (i in seq_along(pasos)) {
   if (!identical(codigo, 0L)) {
     reportar('ERROR', pasos[[i]], paste('Codigo de salida', codigo, '- revisa', log))
     stop('La actualización se interrumpió; consulta el reporte de estado y los logs.')
+  }
+  if (i==1L) {
+    firma_despues <- if (file.exists(csv_crudo)) unname(tools::md5sum(csv_crudo)) else NA_character_
+    derivados <- c('data/futbol.sqlite','data/procesados/noticias_preprocesadas.csv',
+      'data/procesados/tokens_limpios.csv','data/procesados/mineria_noticias.csv',
+      paste0('reportes/fase5/',c('01_frecuencia_palabras.csv','02_bigramas.csv',
+        '09_detalle_menciones_equipos.csv','10_detalle_menciones_competiciones.csv')))
+    if (!is.na(firma_antes) && identical(firma_antes,firma_despues) && all(file.exists(derivados))) {
+      reportar('COMPLETADO','Final','Sin cambios en las noticias. Se conservan SQLite, los graficos y el chatbot ya procesados.')
+      return(invisible(NULL))
+    }
   }
 }
 

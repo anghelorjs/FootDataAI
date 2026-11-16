@@ -1,5 +1,6 @@
 # Servicios compartidos por la API. No ejecuta scraping al cargar este archivo.
 source('R/05_chatbot.R', local=TRUE, encoding='UTF-8')
+source('R/12_configuracion_rss.R', local=TRUE, encoding='UTF-8')
 
 fd_web <- new.env(parent=emptyenv())
 fd_web$snapshot <- NULL
@@ -119,10 +120,7 @@ fd_filtrar <- function(n, filtros=list()) {
 }
 
 fd_control_rss <- function() {
-  p <- 'reportes/ultima_consulta_bbc.rds'
-  anterior <- if (file.exists(p)) tryCatch(readRDS(p),error=function(e) NULL) else NULL
-  if (!inherits(anterior,'POSIXct')) return(0)
-  max(0, ceiling(3600-as.numeric(difftime(Sys.time(),anterior,units='secs'))))
+  fd_rss_plan()$cooldownSeconds
 }
 
 fd_estado <- function() {
@@ -140,10 +138,10 @@ fd_estado <- function() {
     if (length(x)) substring(x[[1]],nchar(clave)+2) else ''
   }
   bloqueado <- dir.exists('reportes/fase8/actualizacion_en_curso.lock')
-  list(running=vivo || bloqueado, automatic=fd_web$automatico,
-    cooldownSeconds=fd_control_rss(), state=if (!is.null(fd_web$error)) 'ERROR' else valor('estado'),
+  c(list(running=vivo || bloqueado, automatic=fd_web$automatico,
+    state=if (!is.null(fd_web$error)) 'ERROR' else valor('estado'),
     phase=valor('fase'), detail=if (!is.null(fd_web$error)) fd_web$error else valor('detalle'),
-    updatedAt=valor('fecha'))
+    updatedAt=valor('fecha')),fd_rss_plan())
 }
 
 fd_iniciar_actualizacion <- function() {
@@ -167,6 +165,9 @@ fd_iniciar_actualizacion <- function() {
 fd_tick <- function() {
   estado <- fd_estado()
   espera <- if (is.na(fd_web$ultimo_inicio)) Inf else as.numeric(difftime(Sys.time(),fd_web$ultimo_inicio,units='secs'))
-  if (fd_web$automatico && !estado$running && estado$cooldownSeconds==0 && espera>=3600)
-    tryCatch(fd_iniciar_actualizacion(),error=function(e) {fd_web$error <- conditionMessage(e)})
+  if (fd_web$automatico && !estado$running && estado$cooldownSeconds==0 && espera>=60)
+    tryCatch(fd_iniciar_actualizacion(),error=function(e) {
+      fd_web$error <- conditionMessage(e)
+      fd_web$ultimo_inicio <- Sys.time()
+    })
 }

@@ -7,13 +7,16 @@
 paquetes <- c('httr2', 'xml2', 'dplyr', 'readr', 'tibble', 'stringr')
 faltantes <- paquetes[!vapply(paquetes, requireNamespace, logical(1), quietly = TRUE)]
 if (length(faltantes)) stop('Instala los paquetes faltantes: ', paste(faltantes, collapse=', '))
+source('R/12_configuracion_rss.R',local=TRUE,encoding='UTF-8')
 
 CARPETA_CRUDOS <- file.path('data', 'crudos')
 CARPETA_REPORTES <- 'reportes'
 CSV_SALIDA <- file.path(CARPETA_CRUDOS, 'noticias_futbol.csv')
 LOG_SALIDA <- file.path(CARPETA_REPORTES, 'log_extracciones.csv')
 CONTROL <- file.path(CARPETA_REPORTES, 'ultima_consulta_bbc.rds')
-INTERVALO_MINUTOS <- 60
+INTERVALO_MINUTOS <- fd_rss_intervalo_minutos()
+CACHE_RUTA <- file.path(CARPETA_REPORTES,'cache_rss.rds')
+cache_http <- fd_rss_cache(CACHE_RUTA)
 
 # Fuentes oficiales por seccion. No se consultan paginas individuales.
 FEEDS <- c(
@@ -79,12 +82,19 @@ extraer_feed <- function(nombre, url) {
     httr2::req_user_agent('FootDataAI/1.0 (proyecto academico; RSS; consultas espaciadas)') |>
     httr2::req_timeout(25) |>
     httr2::req_error(is_error=function(resp) FALSE)
+  anterior <- cache_http$feeds[[nombre]]
+  if (!is.null(anterior$etag)) req <- httr2::req_headers(req,`If-None-Match`=anterior$etag)
+  if (!is.null(anterior[['last-modified']])) req <- httr2::req_headers(req,`If-Modified-Since`=anterior[['last-modified']])
   resp <- tryCatch(httr2::req_perform(req), error=function(e) e)
   if (inherits(resp, 'error')) {
+    cache_http <<- fd_rss_guardar_respuesta(cache_http,nombre,0L)
     warning('No se pudo consultar ', nombre, ': ', conditionMessage(resp))
     return(list(estado='CONEXION', datos=base_vacia()))
   }
   codigo <- httr2::resp_status(resp)
+  headers <- as.list(httr2::resp_headers(resp))
+  cache_http <<- fd_rss_guardar_respuesta(cache_http,nombre,codigo,headers)
+  if (codigo==304L) return(list(estado='304',datos=base_vacia()))
   if (codigo != 200L) {
     warning(nombre, ': HTTP ', codigo, '. No se reintentara.')
     return(list(estado=as.character(codigo), datos=base_vacia()))
@@ -95,6 +105,8 @@ extraer_feed <- function(nombre, url) {
     return(list(estado='XML_INVALIDO', datos=base_vacia()))
   }
   items <- xml2::xml_find_all(doc, '//channel/item')
+  ttl <- texto_xml(xml2::xml_find_first(doc,'//channel'),'./ttl')
+  cache_http <<- fd_rss_guardar_respuesta(cache_http,nombre,codigo,headers,ttl)
   if (!length(items)) {
     warning(nombre, ': RSS sin elementos item.')
     return(list(estado='SIN_ITEMS', datos=base_vacia()))
@@ -128,19 +140,14 @@ extraer_feed <- function(nombre, url) {
 
 cat('\nFOOTDATA AI - Extraccion RSS de futbol\n')
 acumulado <- leer_csv(CSV_SALIDA, base_vacia())
+datos_previos <- acumulado
 cat('Noticias guardadas previamente:', nrow(acumulado), '\n')
 
-if (file.exists(CONTROL)) {
-  anterior <- tryCatch(readRDS(CONTROL), error=function(e) NULL)
-  if (inherits(anterior, 'POSIXct')) {
-    min_pasados <- as.numeric(difftime(Sys.time(), anterior, units='mins'))
-    if (is.finite(min_pasados) && min_pasados >= 0 && min_pasados < INTERVALO_MINUTOS) {
-      cat(sprintf('Se omite consulta: faltan %.1f minutos para el proximo intento.\n',
-                  INTERVALO_MINUTOS-min_pasados))
-      cat('Archivo disponible:', CSV_SALIDA, '\n')
-      quit(save='no',status=0)
-    }
-  }
+plan <- fd_rss_plan(cache=cache_http,intervalo=INTERVALO_MINUTOS)
+if (plan$cooldownSeconds>0) {
+  cat(sprintf('Se omite consulta: faltan %.1f minutos. %s\n',plan$cooldownSeconds/60,plan$cooldownReason))
+  cat('Archivo disponible:',CSV_SALIDA,'\n')
+  quit(save='no',status=0)
 }
 # Contabilizar intentos fallidos para no sobrecargar el servidor.
 saveRDS(Sys.time(), CONTROL)
@@ -152,6 +159,7 @@ for (i in seq_along(FEEDS)) {
   nombre <- names(FEEDS)[i]
   cat('Consultando:', nombre, '\n')
   r <- extraer_feed(nombre, FEEDS[[i]])
+  saveRDS(cache_http,CACHE_RUTA)
   estados <- c(estados, paste0(nombre, ':', r$estado))
   resultados[[i]] <- r$datos
   if (r$estado %in% c('429','403')) {
@@ -173,8 +181,10 @@ consolidado <- dplyr::bind_rows(acumulado, extraidas) |>
   dplyr::distinct(url, .keep_all=TRUE)
 
 # Crear CSV solo cuando haya datos (nuevos o historicos).
-if (nrow(consolidado)) {
+if (nrow(consolidado) && !fd_rss_mismos_datos(datos_previos,consolidado)) {
   readr::write_excel_csv(consolidado, CSV_SALIDA, na='')
+} else if (nrow(consolidado)) {
+  cat('El contenido RSS no cambio. Se conserva el CSV sin volver a escribirlo.\n')
 } else {
   cat('No llegaron noticias validas. No se creo un CSV vacio.\n')
 }
@@ -197,6 +207,6 @@ cat('Estado:',paste(estados,collapse='; '),'\n')
 cat('CSV:',CSV_SALIDA,'\n')
 cat('Log:',LOG_SALIDA,'\n')
 if (nrow(nuevas)) print(utils::head(dplyr::select(nuevas, titulo, fecha_publicacion_utc), 5))
-if (!any(grepl(':200$', estados))) {
+if (!any(grepl(':(200|304)$', estados))) {
   stop('Ningun canal RSS respondio correctamente. Se conservaron las noticias existentes; revisa el log de extraccion.')
 }
